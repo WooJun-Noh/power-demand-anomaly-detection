@@ -316,6 +316,12 @@
 
 ---
 
+## 2편 — 건물 단위 판별
+
+이 분석에는 정답이 없어 판별이 맞았는지를 근거로만 따졌습니다. 2편은 같은 절차를 사람이 이상을 표시해 둔 건물 단위 전력 데이터(LEAD1.0, 건물 200개)에 대어 판별이 맞았는지를 직접 셉니다. 건물 데이터에는 168시간 평균보다 같은 요일·같은 시각 기준선이 F1이 높았고, 공휴일 판별은 채택했으며, 사이트 전체 현상 판별은 기각했습니다. 무엇을 이상으로 볼지는 목적이 정한다는 결론까지, 과정과 수치는 [`part2_building/README.md`](part2_building/README.md)에 있습니다.
+
+---
+
 ## 파일 구성
 
 ```
@@ -325,6 +331,7 @@ power-demand-anomaly-detection/
 │   ├── 01_sunday_profile.png
 │   ├── 02_discrimination.png
 │   └── 03_sunday_scatter.png
+├── part2_building/            # 2편 — 건물 단위 판별(스크립트 01~07 · README)
 └── README.md
 ```
 
