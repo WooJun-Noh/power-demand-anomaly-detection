@@ -1,20 +1,18 @@
-"""2편 6일차 — 건물을 나누고 두 갈래를 따로 돌린 뒤, 확인용 건물에서 한 번만 비교한다.
+"""2편 6단계: 건물을 튜닝용과 검증용으로 나누고, 두 방법을 검증용에서 한 번만 비교한다.
 
-나누기 (결과를 보기 전에 고정)
-- 건물 200개를 번호순으로 놓고 numpy default_rng(0)로 섞어 앞 100개를 「고르는 용」,
-  뒤 100개를 「확인용」으로 둔다.
+나누기(결과를 보기 전에 고정)
+- 건물 200개를 번호순으로 정렬하고 numpy default_rng(0)로 섞어
+  앞 100개는 튜닝용, 뒤 100개는 검증용으로 쓴다.
 
-갈래 A — 1편과 이어지는 정의 (규칙은 4일차까지 정한 것 그대로, 고르는 용 결과로 바꾸지 않음)
-- 기준선: 같은 요일·같은 시각, 앞뒤 4주 중앙값 · K = 2.5 (1편 채택값)
-- 판정 네 갈래: 이상 / 이유가 있는 정상(공휴일) / 판단 불가(값이나 기준선이 없음) / 정상
+방법 A: 1편 방식 유지 (4단계까지 정한 규칙 그대로, 튜닝용 결과로 바꾸지 않음)
+- 기준선: 같은 요일·같은 시각, 앞뒤 4주 중앙값 / K = 2.5
+- 분류: 이상 / 공휴일(정상) / 판정 불가(값이나 기준선이 없음) / 정상
 
-갈래 B — LEAD 점수 올리기
-- 고르는 용 100개에서만 아래 조합을 모두 돌려 F1이 가장 높은 하나를 고른다
-  기준선 {168시간 평균, 같은 요일·같은 시각 2주 · 4주 · 8주} × K {1.5, 2.0, 2.5, 3.0, 3.5, 4.0}
-  × 공휴일 거름 {함, 안 함}
-- 고른 조합을 확인용 100개에 딱 한 번 댄다
-
-비교는 확인용 100개에서만 한다.
+방법 B: LEAD 점수 최적화
+- 튜닝용 100개에서만 아래 조합을 모두 돌려 F1이 가장 높은 것을 고른다
+  기준선 {168시간 평균, 같은 요일·같은 시각 2·4·8주} × K {1.5, 2.0, 2.5, 3.0, 3.5, 4.0}
+  × 공휴일 제외 {함, 안 함}
+- 고른 조합을 검증용 100개에 한 번만 적용한다
 """
 
 from importlib import import_module
@@ -63,8 +61,8 @@ def branch_a(d: pd.DataFrame) -> pd.Series:
     out = pd.Series("정상", index=d.index)
     det = z.abs().ge(2.5)
     out[det & ~d["holiday"]] = "이상"
-    out[det & d["holiday"]] = "이유 있는 정상(공휴일)"
-    out[z.isna()] = "판단 불가"
+    out[det & d["holiday"]] = "공휴일(정상)"
+    out[z.isna()] = "판정 불가"
     return out
 
 
@@ -77,44 +75,44 @@ def main() -> None:
     d = day5.frame()  # 시간축 · 메타데이터 · 공휴일 (z_how4와 같은 값의 z 열도 들어 있음)
     d = add_z(d)
     tune, test = split(d["building_id"].unique())
-    d["set"] = np.where(d["building_id"].isin(tune), "고르는 용", "확인용")
+    d["set"] = np.where(d["building_id"].isin(tune), "튜닝용", "검증용")
     label = d["anomaly"] == 1
     print("건물 수", d.groupby("set")["building_id"].nunique().to_dict(),
           "· 이상 표시 비율", d.groupby("set")["anomaly"].mean().round(4).to_dict())
 
-    # 갈래 B — 고르는 용에서만 고르기
-    T = d["set"] == "고르는 용"
+    # 방법 B: 튜닝용에서만 고르기
+    T = d["set"] == "튜닝용"
     grid = []
     for bl, k, hol in itertools.product(BASELINES, KS_GRID, [True, False]):
         s = day2.score(predict_b(d[T], bl, k, hol), label[T])
-        grid.append({"기준선": bl, "K": k, "공휴일 거름": hol, **s})
+        grid.append({"기준선": bl, "K": k, "공휴일 제외": hol, **s})
     grid = pd.DataFrame(grid).sort_values("F1", ascending=False)
-    print("\n== 갈래 B — 고르는 용 100개, F1 상위 8 ==")
+    print("\n== 방법 B: 튜닝용 100개, F1 상위 8 ==")
     print(grid.head(8).to_string(index=False))
     best = grid.iloc[0]
 
-    # 확인용 100개에서 한 번만
-    V = d["set"] == "확인용"
+    # 검증용 100개에서 한 번만
+    V = d["set"] == "검증용"
     v = d[V].copy()
     lv = label[V]
     v["A"] = branch_a(v)
     a_det = v["A"] == "이상"
-    b_det = predict_b(v, best["기준선"], best["K"], bool(best["공휴일 거름"]))
-    print("\n== 확인용 100개 — 두 갈래 ==")
+    b_det = predict_b(v, best["기준선"], best["K"], bool(best["공휴일 제외"]))
+    print("\n== 검증용 100개: 두 방법 비교 ==")
     print(pd.DataFrame([
-        {"갈래": "A — 1편과 이어지는 정의", **day2.score(a_det, lv)},
-        {"갈래": f"B — {best['기준선']} · K={best['K']} · 공휴일 거름 {best['공휴일 거름']}",
+        {"방법": "A (1편 방식 유지)", **day2.score(a_det, lv)},
+        {"방법": f"B ({best['기준선']}, K={best['K']}, 공휴일 제외 {best['공휴일 제외']})",
          **day2.score(b_det, lv)},
     ]).to_string(index=False))
 
-    print("\n== 확인용 — 갈래 A 판정별로 사람 표시가 어디에 있나 ==")
+    print("\n== 검증용: 방법 A 분류별 사람 표시 ==")
     t = v.groupby("A")["anomaly"].agg(["size", "sum"])
     t.columns = ["시간", "사람이 이상으로 표시"]
     t["표시 비율"] = (t["사람이 이상으로 표시"] / t["시간"]).round(3)
     print(t.to_string())
 
     v["B"] = b_det
-    v.to_pickle(base.DATA / "day6_test.pkl")
+    v.to_pickle(base.DATA / "step6_test.pkl")
 
 
 if __name__ == "__main__":
