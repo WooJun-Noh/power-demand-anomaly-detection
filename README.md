@@ -322,6 +322,12 @@
 
 ---
 
+## 첫 판 도구 — 이상한 시간과 그 이유를 표로
+
+1편과 2편에서 검증한 방법을 다른 데이터에도 바로 쓸 수 있게 스크립트 하나(`detect.py`)로 묶었습니다. 시간별 사용량 CSV를 넣으면 평소와 다르게 쓴 시간을 찾아 공휴일 때문인지 아닌지를 나누고, 이유와 함께 시간별 표와 구간별 표로 내줍니다. 2편 검증용 건물 100개에 돌려 2편과 같은 값이 나오는 것을 확인했습니다. 쓰는 법과 1편 데이터에 돌려 본 결과는 [`part3_tool/README.md`](part3_tool/README.md)에 있습니다.
+
+---
+
 ## 파일 구성
 
 ```
@@ -332,6 +338,7 @@ power-demand-anomaly-detection/
 │   ├── 02_discrimination.png
 │   └── 03_sunday_scatter.png
 ├── part2_building/            # 2편: 건물 단위 이상 판별 (스크립트 01~07, README)
+├── part3_tool/                # 첫 판 도구: detect.py, 2편과 같은지 확인하는 check_lead.py, README
 └── README.md
 ```
 
