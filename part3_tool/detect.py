@@ -8,6 +8,7 @@
 
 사용법
     python detect.py 입력.csv --country KR
+    python detect.py 입력.csv --country KR --asos ASOS_2025_일자료.csv
     python detect.py 입력.csv --country US --time timestamp --value meter_reading
 
 입력 형식은 두 가지를 받는다.
@@ -17,6 +18,16 @@
 출력
 - <입력>_시간별.csv : 걸린 시간마다 값 · 기준선 · z · 방향 · 분류 · 이유
 - <입력>_구간별.csv : 같은 분류·같은 방향으로 이어진 시간을 한 구간으로 묶은 표
+
+날씨 이유(--asos, 선택)
+- 기상청 ASOS 일자료를 주면, 평일에 「이상 · 높음」으로 걸린 시간에 그날의 일조차 · 기온차와
+  「일조 몫이 큼 / 기온 몫이 큼」을 이유로 덧붙인다(일조차 · 기온차는 check_weather.py와 같은 계산)
+- 몫 = 기울기 × 차이. 기울기는 split_weather.py가 2025년 전국 데이터(평일 244일)에서 낸 값을
+  고정해 쓴다: 일조차 1시간당 −0.270, 기온차 1°C당 겨울 −0.225 · 봄 −0.060 · 여름 +0.562 · 가을 +0.126
+- 그래서 2025년 전국 전력수요가 아닌 데이터(건물 하나, 다른 해)에는 이 기울기가 맞는다는 근거가 없다.
+  그런 데이터에서는 split_weather.py를 그 데이터로 다시 돌려 기울기부터 새로 낸다
+- 일조와 기온은 하루 값이고 기울기는 10~15시 평균 z로 낸 것이라, 저녁에 걸린 시간도 그날 낮의 날씨로 본다.
+  태양광 발전실적과 대조한 것이 아니므로 「일조 몫이 큼」을 「태양광 때문」으로 읽지 않는다
 
 한계(2편 검증용 건물 100개 기준): 사람이 이상으로 표시한 시간 중 43%를 잡았고,
 이 도구가 이상으로 낸 시간 중 37%가 사람도 이상으로 본 시간이었다.
@@ -33,6 +44,11 @@ import pandas as pd
 K = 2.5
 WEEKS = 4
 MIN_WEEKS = 3
+# split_weather.py가 2025년 전국 평일 244일에서 낸 기울기(낮 z 단위). 3일차 결과를 고정해 쓴다.
+SUN_SLOPE = -0.270
+TEMP_SLOPE = {"겨울": -0.225, "봄": -0.060, "여름": 0.562, "가을": 0.126}
+SEASON = {12: "겨울", 1: "겨울", 2: "겨울", 3: "봄", 4: "봄", 5: "봄",
+          6: "여름", 7: "여름", 8: "여름", 9: "가을", 10: "가을", 11: "가을"}
 LIMIT_NOTE = ("한계: 2편 검증(건물 100개)에서 사람이 표시한 이상의 43%를 잡았고, "
               "이 도구가 이상으로 낸 시간의 37%만 사람도 이상으로 봤습니다. "
               "기준선과 차이가 거의 없는 이상은 잡지 못합니다.")
@@ -131,6 +147,35 @@ def classify(x: pd.Series, country: str = "KR", subdiv=None, k: float = K,
     return d
 
 
+def add_weather(d: pd.DataFrame, asos_path: Path) -> pd.DataFrame:
+    """평일 「이상 · 높음」 시간에 그날의 일조 몫 · 기온 몫과 큰 쪽을 이유로 덧붙인다."""
+    from check_weather import compare, read_asos  # --asos를 줄 때만 필요하다
+
+    day, _ = read_asos(asos_path)
+    d = d.copy()
+    for c in ["일조차", "기온차", "일조 몫", "기온 몫"]:
+        d[c] = np.nan
+    d["날씨"] = ""
+    target = (d["분류"] == "이상") & (d["방향"] == "높음") & (d.index.dayofweek <= 4)
+    for dd in sorted(set(d.index[target].normalize())):
+        rows = target & (d.index.normalize() == dd)
+        if dd not in day.index:
+            d.loc[rows, "날씨"] = "날씨 자료 없음"
+            continue
+        ds, dt, n = compare(day, dd)
+        if np.isnan(ds):
+            d.loc[rows, "날씨"] = f"비교할 같은 요일 날씨가 {n}일뿐"
+            continue
+        sun, tmp = SUN_SLOPE * ds, TEMP_SLOPE[SEASON[dd.month]] * dt
+        big = "일조" if abs(sun) >= abs(tmp) else "기온"
+        d.loc[rows, ["일조차", "기온차", "일조 몫", "기온 몫"]] = [ds, dt, sun, tmp]
+        d.loc[rows, "날씨"] = f"{big} 몫이 큼"
+        d.loc[rows, "이유"] = d.loc[rows, "이유"] + (
+            f" · 날씨: {big} 몫이 큼(일조차 {ds:+.1f}시간 → {sun:+.2f}, "
+            f"기온차 {dt:+.1f}°C → {tmp:+.2f})")
+    return d
+
+
 def segments(d: pd.DataFrame) -> pd.DataFrame:
     """걸린 시간 중 같은 분류·같은 방향으로 1시간 간격으로 이어진 것을 한 구간으로 묶는다."""
     f = d[d["분류"].isin(["이상", "공휴일(정상)"])].copy()
@@ -157,15 +202,23 @@ def main() -> None:
     p.add_argument("--time", default=None, help="시각(또는 날짜) 열 이름")
     p.add_argument("--value", default=None, help="값 열 이름(세로형)")
     p.add_argument("--k", type=float, default=K, help="임계값. 2편 검증값 2.5에서 바꾸면 위 한계 수치가 맞지 않는다")
+    p.add_argument("--asos", type=Path, default=None,
+                   help="기상청 ASOS 일자료 CSV. 주면 평일 「이상 · 높음」에 일조 몫 · 기온 몫 이유를 붙인다")
     a = p.parse_args()
 
     x = to_series(read_any(a.csv), a.time, a.value)
     d = classify(x, a.country, a.subdiv, a.k)
+    if a.asos:
+        d = add_weather(d, a.asos)
     seg = segments(d)
 
     stem = a.csv.with_suffix("")
     hours = d[d["분류"].isin(["이상", "공휴일(정상)"])].round({"값": 1, "기준선": 1, "차이": 1, "z": 2})
-    hours[["값", "기준선", "차이", "z", "방향", "분류", "이유"]].to_csv(f"{stem}_시간별.csv", encoding="utf-8-sig")
+    cols = ["값", "기준선", "차이", "z", "방향", "분류", "이유"]
+    if a.asos:
+        hours = hours.round({"일조차": 2, "기온차": 1, "일조 몫": 2, "기온 몫": 2})
+        cols += ["일조차", "기온차", "일조 몫", "기온 몫", "날씨"]
+    hours[cols].to_csv(f"{stem}_시간별.csv", encoding="utf-8-sig")
     seg.to_csv(f"{stem}_구간별.csv", index=False, encoding="utf-8-sig")
 
     print(f"기간 {d.index.min():%Y-%m-%d %H시} ~ {d.index.max():%Y-%m-%d %H시} · {len(d):,}시간")
@@ -173,6 +226,12 @@ def main() -> None:
     print(f"\n구간 {len(seg)}개 (이상 {int((seg['분류'] == '이상').sum())} · 공휴일 {int((seg['분류'] == '공휴일(정상)').sum())})")
     if len(seg):
         print(seg.sort_values("최대 |z|", ascending=False).head(10).to_string(index=False))
+    if a.asos:
+        w = d[d["날씨"] != ""]
+        per_day = w.groupby(w.index.normalize())["날씨"].first()
+        print(f"\n날씨 이유(평일 이상 · 높음 {len(per_day)}일): " +
+              " · ".join(f"{k} {v}일" for k, v in per_day.value_counts().items()))
+        print("기울기는 2025년 전국 데이터에서 낸 고정값입니다. 다른 데이터에는 split_weather.py로 다시 냅니다.")
     print(f"\n저장: {stem}_시간별.csv · {stem}_구간별.csv")
     print(LIMIT_NOTE)
 
