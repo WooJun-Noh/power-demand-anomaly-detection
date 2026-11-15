@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전력 사용량 진단 — 평소와 다르게 쓴 시간 찾기</title>
+<meta name="description" content="시간별 전력 사용량 CSV를 넣으면 평소와 다르게 쓴 시간을 찾아 공휴일 때문인지 나누고 이유와 함께 표로 냅니다. 계산은 이 브라우저 안에서만 돕니다.">
+<style>
+  :root {
+    --bg: #f7f6f2; --panel: #ffffff; --ink: #1c1b19; --sub: #5f5c55; --line: #dedbd2;
+    --accent: #0b5d4f; --accent-ink: #ffffff; --hot: #c2410c; --cold: #1d4ed8; --hol: #8a8577;
+    --warn-bg: #fff6e0; --warn-line: #e6c36a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151513; --panel: #1f1e1b; --ink: #ecebe6; --sub: #a5a196; --line: #36342f;
+      --accent: #4fb8a4; --accent-ink: #10110f; --hot: #fb923c; --cold: #7aa2ff; --hol: #8f8b80;
+      --warn-bg: #2a2413; --warn-line: #6b5a23;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 1.9rem; line-height: 1.3; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 1.15rem; margin: 0 0 12px; }
+  p { margin: 0 0 12px; }
+  .lead { color: var(--sub); max-width: 46em; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-top: 20px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  label { display: block; font-size: .85rem; color: var(--sub); margin-bottom: 4px; }
+  select, input[type=file] { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; max-width: 100%; }
+  button { font: inherit; border-radius: 8px; padding: 9px 16px; border: 1px solid var(--accent); cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .note { font-size: .88rem; color: var(--sub); }
+  .status { margin-top: 14px; font-size: .95rem; min-height: 1.6em; }
+  .status.err { color: var(--hot); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card .n { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .k { font-size: .85rem; color: var(--sub); }
+  .limit { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px; padding: 12px 14px; font-size: .92rem; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  td.reason { white-space: normal; min-width: 18em; }
+  th { color: var(--sub); font-weight: 600; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .8rem; border: 1px solid currentColor; }
+  .tag.up { color: var(--hot); } .tag.down { color: var(--cold); } .tag.hol { color: var(--hol); }
+  svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: .85rem; color: var(--sub); margin-top: 6px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  ul { margin: 0; padding-left: 1.2em; }
+  li { margin-bottom: 4px; }
+  a { color: var(--accent); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>전력 사용량에서 평소와 다르게 쓴 시간 찾기</h1>
+  <p class="lead">시간별 사용량 CSV를 넣으면, 앞뒤 4주 같은 요일·같은 시각과 견줘 크게 벗어난 시간을 찾고, 공휴일 때문인지 아닌지를 나눠 이유와 함께 보여 줍니다. 파일은 이 브라우저 밖으로 나가지 않습니다 — 계산이 이 페이지 안에서 돕니다.</p>
+
+  <section class="panel" aria-labelledby="h-in">
+    <h2 id="h-in">1. 파일 넣기</h2>
+    <div class="row">
+      <div>
+        <label for="file">시간별 사용량 CSV</label>
+        <input id="file" type="file" accept=".csv,text/csv">
+      </div>
+      <div>
+        <label for="country">공휴일 달력</label>
+        <select id="country">
+          <option value="KR">대한민국</option>
+          <option value="US">미국</option>
+          <option value="GB">영국</option>
+          <option value="JP">일본</option>
+          <option value="DE">독일</option>
+          <option value="NL">네덜란드</option>
+          <option value="">공휴일을 나누지 않음</option>
+        </select>
+      </div>
+      <button id="run" disabled>진단하기</button>
+      <button id="sample" class="ghost" disabled>가상 데이터로 먼저 보기</button>
+    </div>
+    <p class="note" style="margin-top:12px">받는 형식은 둘입니다. ① 시각 열 하나와 값 열 하나(세로형) ② 날짜 열 하나와 「1시」~「24시」 열(한국전력거래소 시간별 전력수요량 형식). 최소 4주치가 있어야 판정합니다. 한 시간보다 촘촘한 값은 받지 않습니다.</p>
+    <div id="status" class="status" role="status" aria-live="polite">계산 도구를 불러오는 중입니다(처음 한 번, 10~30초).</div>
+  </section>
+
+  <section id="result" class="panel" aria-labelledby="h-out" hidden>
+    <h2 id="h-out">2. 결과</h2>
+    <p id="period" class="note"></p>
+    <div class="cards" id="cards"></div>
+    <div id="chart"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--hot)"></span>이상 · 평소보다 높음</span>
+      <span><span class="dot" style="background:var(--cold)"></span>이상 · 평소보다 낮음</span>
+      <span><span class="dot" style="background:var(--hol)"></span>공휴일(정상)</span>
+    </div>
+    <h2 style="margin-top:24px">걸린 구간 <span class="note" id="segnote"></span></h2>
+    <div class="scroll"><table id="segs"></table></div>
+    <div class="row" style="margin-top:16px">
+      <button id="dl-seg" class="ghost">구간별 표 내려받기(CSV)</button>
+      <button id="dl-hour" class="ghost">시간별 표 내려받기(CSV)</button>
+    </div>
+    <p class="limit" style="margin-top:16px" id="limit"></p>
+  </section>
+
+  <section class="panel" aria-labelledby="h-how">
+    <h2 id="h-how">어떻게 판정하나</h2>
+    <ul>
+      <li>기준선은 앞뒤 4주 동안 같은 요일·같은 시각 값의 중앙값입니다(그 주는 빼고, 최소 3주).</li>
+      <li>값과 기준선의 차이를 그 데이터 전체의 차이 표준편차로 나눈 것이 2.5 이상이면 걸린 시간입니다.</li>
+      <li>걸린 시간이 공휴일이면 「공휴일(정상)」로 따로 둡니다. 고장을 찾는 사람에게는 정상이고, 사용량 변화를 보는 사람에게는 이상이라 지우지 않고 나눠 보여 줍니다.</li>
+      <li>값이 없거나 견줄 같은 요일·같은 시각이 3주 미만이면 「판정 불가」입니다.</li>
+    </ul>
+    <p class="note" style="margin-top:12px">검증 과정과 한계는 <a href="https://github.com/WooJun-Noh/power-demand-anomaly-detection">저장소 README</a>에 있습니다. 이 페이지는 저장소의 <code>part3_tool/detect.py</code>를 그대로 불러 씁니다.</p>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+const say = (t, err = false) => { statusEl.textContent = t; statusEl.classList.toggle("err", err); };
+let py = null, last = null;
+
+const PY_RUN = `
+import json
+from pathlib import Path
+import pandas as pd
+import detect
+
+def run(path, country):
+    raw = detect.read_any(Path(path))
+    x = detect.to_series(raw)
+    n_val = int(x.notna().sum())
+    if n_val < 24 * 28:
+        raise ValueError(f"값이 있는 시간이 {n_val:,}개뿐입니다. 최소 4주치(672시간)가 필요합니다.")
+    d = detect.classify(x, country or "")
+    seg = detect.segments(d)
+    counts = d["분류"].value_counts()
+    hours = d[d["분류"].isin(["이상", "공휴일(정상)"])].round({"값": 1, "기준선": 1, "차이": 1, "z": 2})
+    cols = ["값", "기준선", "차이", "z", "방향", "분류", "이유"]
+    seg_out = seg.copy()
+    if len(seg_out):
+        seg_out["시작"] = seg_out["시작"].dt.strftime("%Y-%m-%d %H시")
+        seg_out["끝"] = seg_out["끝"].dt.strftime("%Y-%m-%d %H시")
+    vals = d["값"].where(d["값"].notna(), None)
+    return json.dumps({
+        "start": f"{d.index.min():%Y-%m-%d %H시}", "end": f"{d.index.max():%Y-%m-%d %H시}", "n": len(d),
+        "counts": {k: int(counts.get(k, 0)) for k in ["이상", "공휴일(정상)", "판정 불가", "정상"]},
+        "nseg": {"이상": int((seg["분류"] == "이상").sum()) if len(seg) else 0,
+                 "공휴일(정상)": int((seg["분류"] == "공휴일(정상)").sum()) if len(seg) else 0},
+        "segs": seg_out.to_dict("records"),
+        "values": [None if v is None or v != v else float(v) for v in d["값"].tolist()],
+        "marks": [[int(i), c, dirn] for i, (c, dirn) in enumerate(zip(d["분류"], d["방향"])) if c in ("이상", "공휴일(정상)")],
+        "t0": d.index.min().isoformat(),
+        "hours_csv": hours[cols].to_csv(encoding="utf-8"),
+        "segs_csv": seg.to_csv(index=False, encoding="utf-8"),
+        "limit": detect.LIMIT_NOTE,
+    }, ensure_ascii=False, default=str)
+`;
+
+async function boot() {
+  try {
+    py = await loadPyodide();
+    await py.loadPackage(["pandas", "micropip"]);
+    await py.runPythonAsync(`import micropip\nawait micropip.install("holidays")`);
+    const src = await (await fetch("../part3_tool/detect.py", { cache: "no-cache" })).text();
+    if (!src.includes("def classify")) throw new Error("detect.py를 불러오지 못했습니다");
+    py.FS.writeFile("detect.py", src);
+    py.runPython(PY_RUN);
+    $("sample").disabled = false;
+    $("run").disabled = !$("file").files.length;
+    say("준비됐습니다. 파일을 고르거나 가상 데이터로 먼저 보십시오.");
+  } catch (e) {
+    say("계산 도구를 불러오지 못했습니다: " + e.message, true);
+  }
+}
+
+// 가상 데이터: 9주치 시간별 값. 하루·주간 흐름에 잡음을 얹고, 높은 구간 하나와 낮은 구간 하나를 넣는다.
+function sampleCsv() {
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
+  const t0 = new Date(2025, 2, 3, 0);  // 2025-03-03(월)
+  const rows = ["시각,사용량(kWh)"];
+  for (let h = 0; h < 24 * 63; h++) {
+    const t = new Date(t0.getTime() + h * 3600e3);
+    const hr = t.getHours(), dow = t.getDay(), wk = dow === 0 || dow === 6;
+    let v = 120 + (wk ? 25 : 90) * Math.max(0, Math.sin(Math.PI * (hr - 6) / 14)) + 6 * gauss();
+    const day = Math.floor(h / 24);
+    if (day === 30 && hr >= 13 && hr <= 16) v += 75;   // 4/2(수) 오후에 평소보다 많이 씀
+    if (day === 44 && hr >= 9 && hr <= 14) v -= 70;    // 4/16(수) 낮에 평소보다 적게 씀
+    const p = (n) => String(n).padStart(2, "0");
+    rows.push(`${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(hr)}:00,${v.toFixed(1)}`);
+  }
+  return rows.join("\n");
+}
+
+async function analyze(bytes, name) {
+  $("run").disabled = $("sample").disabled = true;
+  say("계산하는 중입니다…");
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    py.FS.writeFile("input.csv", bytes);
+    const fn = py.globals.get("run");
+    const out = JSON.parse(fn("input.csv", $("country").value));
+    fn.destroy();
+    last = { ...out, name };
+    render(last);
+    say("끝났습니다.");
+  } catch (e) {
+    const msg = String(e.message || e).trim().split("\n").pop();
+    say("읽지 못했습니다: " + msg, true);
+  } finally {
+    $("sample").disabled = false;
+    $("run").disabled = !$("file").files.length;
+  }
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const num = (n) => Number(n).toLocaleString("ko-KR");
+
+function render(r) {
+  $("result").hidden = false;
+  $("period").textContent = `${r.name} · ${r.start} ~ ${r.end} · ${num(r.n)}시간`;
+  const c = r.counts;
+  $("cards").innerHTML = [
+    ["이상", c["이상"], `${r.nseg["이상"]}구간`],
+    ["공휴일(정상)", c["공휴일(정상)"], `${r.nseg["공휴일(정상)"]}구간`],
+    ["판정 불가", c["판정 불가"], "값이 없거나 견줄 주가 부족"],
+    ["정상", c["정상"], ""],
+  ].map(([k, n, s]) => `<div class="card"><div class="n">${num(n)}<span class="k"> 시간</span></div><div class="k">${k}${s ? " · " + s : ""}</div></div>`).join("");
+  $("limit").textContent = r.limit;
+  drawChart(r);
+
+  const segs = [...r.segs].sort((a, b) => b["최대 |z|"] - a["최대 |z|"]);
+  const show = segs.slice(0, 50);
+  $("segnote").textContent = segs.length > 50 ? `— 벗어난 정도가 큰 순으로 50개(전체 ${segs.length}개는 내려받기)` : segs.length ? "— 벗어난 정도가 큰 순" : "";
+  $("segs").innerHTML = segs.length === 0
+    ? `<tr><td>걸린 시간이 없습니다.</td></tr>`
+    : `<thead><tr><th>시작</th><th>끝</th><th>시간 수</th><th>분류</th><th>최대 |z|</th><th>이유</th></tr></thead><tbody>` +
+      show.map((s) => {
+        const cls = s["분류"] === "공휴일(정상)" ? "hol" : s["방향"] === "높음" ? "up" : "down";
+        const label = s["분류"] === "공휴일(정상)" ? "공휴일(정상)" : `이상 · ${s["방향"]}`;
+        return `<tr><td>${esc(s["시작"])}</td><td>${esc(s["끝"])}</td><td>${s["시간 수"]}</td>` +
+          `<td><span class="tag ${cls}">${label}</span></td><td>${Number(s["최대 |z|"]).toFixed(2)}</td><td class="reason">${esc(s["이유"])}</td></tr>`;
+      }).join("") + `</tbody>`;
+  $("result").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function drawChart(r) {
+  const W = 920, H = 260, L = 56, R = 12, T = 12, B = 30;
+  const v = r.values, n = v.length;
+  const ok = v.filter((x) => x !== null);
+  const lo = Math.min(...ok), hi = Math.max(...ok), pad = (hi - lo) * 0.06 || 1;
+  const y0 = lo - pad, y1 = hi + pad;
+  const X = (i) => L + (i / Math.max(n - 1, 1)) * (W - L - R);
+  const Y = (x) => T + (1 - (x - y0) / (y1 - y0)) * (H - T - B);
+  let path = "", pen = false;
+  for (let i = 0; i < n; i++) {
+    if (v[i] === null) { pen = false; continue; }
+    path += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v[i]).toFixed(1);
+    pen = true;
+  }
+  const t0 = new Date(r.t0);
+  const ticks = [];
+  for (let k = 0; k <= 4; k++) {
+    const yv = y0 + (k / 4) * (y1 - y0);
+    ticks.push(`<line x1="${L}" x2="${W - R}" y1="${Y(yv)}" y2="${Y(yv)}" stroke="var(--line)"/>` +
+      `<text x="${L - 8}" y="${Y(yv) + 4}" text-anchor="end" font-size="11" fill="var(--sub)">${num(Math.round(yv))}</text>`);
+  }
+  for (let k = 0; k <= 5; k++) {
+    const i = Math.round((k / 5) * (n - 1));
+    const d = new Date(t0.getTime() + i * 3600e3);
+    ticks.push(`<text x="${X(i)}" y="${H - 8}" text-anchor="${k === 0 ? "start" : k === 5 ? "end" : "middle"}" font-size="11" fill="var(--sub)">${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}</text>`);
+  }
+  const dots = r.marks.filter(([i]) => v[i] !== null).map(([i, c, dirn]) => {
+    const col = c === "공휴일(정상)" ? "var(--hol)" : dirn === "높음" ? "var(--hot)" : "var(--cold)";
+    return `<circle cx="${X(i).toFixed(1)}" cy="${Y(v[i]).toFixed(1)}" r="2.6" fill="${col}"/>`;
+  }).join("");
+  $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="기간 전체의 시간별 사용량과 걸린 시간">` +
+    ticks.join("") + `<path d="${path}" fill="none" stroke="var(--sub)" stroke-width="0.8" opacity="0.75"/>` + dots + `</svg>`;
+}
+
+function download(name, text) {
+  const blob = new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+$("file").addEventListener("change", () => { $("run").disabled = !py || !$("file").files.length; });
+$("run").addEventListener("click", async () => {
+  const f = $("file").files[0];
+  if (f) analyze(new Uint8Array(await f.arrayBuffer()), f.name);
+});
+$("sample").addEventListener("click", () => {
+  $("country").value = "KR";
+  analyze(new TextEncoder().encode(sampleCsv()), "가상 데이터(9주 · 지어낸 값)");
+});
+$("dl-seg").addEventListener("click", () => last && download("구간별.csv", last.segs_csv));
+$("dl-hour").addEventListener("click", () => last && download("시간별.csv", last.hours_csv));
+boot();
+</script>
+</body>
+</html>
