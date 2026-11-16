@@ -84,6 +84,14 @@
           <option value="">공휴일을 나누지 않음</option>
         </select>
       </div>
+      <div>
+        <label for="contract">계약전력 kW (선택)</label>
+        <input id="contract" type="number" min="0" step="any" placeholder="예: 300" style="width:9em">
+      </div>
+      <div>
+        <label for="price">기본요금 단가 원/kW (선택)</label>
+        <input id="price" type="number" min="0" step="any" placeholder="예: 7220" style="width:9em">
+      </div>
       <button id="run" disabled>진단하기</button>
       <button id="sample" class="ghost" disabled>가상 데이터로 먼저 보기</button>
     </div>
@@ -120,6 +128,10 @@
     <p class="note">연중 최대의 몇 %로 상한을 두면, 그 위로 넘친 시간과 양입니다. 넘친 양만큼을 줄이거나, 옮겨 간 시간도 상한을 넘지 않게 다른 시간으로 옮기면 그 상한까지 피크가 내려갑니다.</p>
     <div class="scroll"><table id="peak-shave"></table></div>
     <p class="note" id="peak-hours" style="margin-top:12px"></p>
+    <h2 style="margin-top:20px">요금적용전력 후보</h2>
+    <p class="note">기본공급약관 제68조 제1항대로, 달마다 「직전 12개월 중 12 · 1 · 2 · 7 · 8 · 9월분과 당월분」의 최대 가운데 가장 큰 값입니다. 별표3대로 경부하시간대(22:00~08:00) · 일요일 · 공휴일의 값은 뺐습니다. 계약전력을 넣으면 30% 하한을, 단가를 넣으면 기본요금을 함께 셉니다.</p>
+    <p class="note" id="bill-sum"></p>
+    <div class="scroll"><table id="peak-bill"></table></div>
     <p class="limit" id="peak-note"></p>
   </section>
 
@@ -149,7 +161,10 @@ import pandas as pd
 import detect
 import peak
 
-def run(path, country):
+def clean(df):
+    return df.astype(object).where(df.notna(), None).to_dict("records")
+
+def run(path, country, contract=None, price=None):
     raw = detect.read_any(Path(path))
     x = detect.to_series(raw)
     n_val = int(x.notna().sum())
@@ -183,6 +198,7 @@ def run(path, country):
         "peak_hours": [[int(h), int(c)] for h, c in peak.peak_hours(x)["시"].value_counts().head(5).items()],
         "peak_n": len(peak.peak_hours(x)),
         "peak_note": peak.HOURLY_NOTE,
+        "peak_bill": clean(peak.billing_demand(x, country or "", None, peak.OFF_PEAK, contract, price)),
     }, ensure_ascii=False, default=str)
 `;
 
@@ -233,7 +249,8 @@ async function analyze(bytes, name) {
   try {
     py.FS.writeFile("input.csv", bytes);
     const fn = py.globals.get("run");
-    const out = JSON.parse(fn("input.csv", $("country").value));
+    const opt = (id) => { const v = parseFloat($(id).value); return v > 0 ? v : null; };
+    const out = JSON.parse(fn("input.csv", $("country").value, opt("contract"), opt("price")));
     fn.destroy();
     last = { ...out, name };
     render(last);
@@ -279,6 +296,22 @@ function render(r) {
   $("result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function renderBill(rows) {
+  const has = (k) => rows.some((b) => k in b);
+  const by = {};
+  rows.forEach((b) => { if (b["정한 달"]) by[b["정한 달"]] = (by[b["정한 달"]] || 0) + 1; });
+  const top = Object.entries(by).sort((a, b) => b[1] - a[1])[0];
+  const src = top && rows.find((b) => b["월"] === top[0]);
+  $("bill-sum").textContent = top && src
+    ? `${rows.length}개월 중 ${top[1]}개월의 요금적용전력 후보를 ${top[0]}의 최대(${num(src["요금 대상 최대"])} · ${src["그 시각"]})가 정했습니다.`
+    : "요금 대상 시간이 없어 후보를 내지 못했습니다.";
+  const v = (x) => (x === null || x === undefined ? "—" : num(x));
+  $("peak-bill").innerHTML = `<thead><tr><th>월</th><th>요금 대상 최대</th><th>그 시각</th><th>요금적용전력 후보</th><th>정한 달</th><th>직전 12개월 중 값 있는 달</th>` +
+    (has("적용값") ? `<th>30% 하한 적용</th><th>적용값</th>` : "") + (has("기본요금(원)") ? `<th>기본요금(원)</th>` : "") + `</tr></thead><tbody>` +
+    rows.map((b) => `<tr><td>${esc(b["월"])}</td><td>${v(b["요금 대상 최대"])}</td><td>${esc(b["그 시각"] || "—")}</td><td>${v(b["요금적용전력 후보"])}</td><td>${esc(b["정한 달"] || "—")}</td><td>${b["직전 12개월 중 값 있는 달"]}</td>` +
+      (has("적용값") ? `<td>${b["30% 하한 적용"] ? "예" : "아니오"}</td><td>${v(b["적용값"])}</td>` : "") + (has("기본요금(원)") ? `<td>${v(b["기본요금(원)"])}</td>` : "") + `</tr>`).join("") + `</tbody>`;
+}
+
 function renderPeak(r) {
   $("peak").hidden = false;
   const se = r.peak_season;
@@ -291,6 +324,7 @@ function renderPeak(r) {
   $("peak-hours").textContent = `가장 높았던 상위 1% 시간(${r.peak_n}시간)이 몰린 시각: ` +
     r.peak_hours.map(([h, c]) => `${h}시 ${c}시간`).join(" · ");
   $("peak-note").textContent = r.peak_note;
+  renderBill(r.peak_bill);
 }
 
 function drawChart(r) {
