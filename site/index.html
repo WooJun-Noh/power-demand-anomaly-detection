@@ -125,7 +125,7 @@
     <h2>달마다 최대</h2>
     <div class="scroll"><table id="peak-month"></table></div>
     <h2 style="margin-top:20px">피크를 낮추려면</h2>
-    <p class="note">연중 최대의 몇 %로 상한을 두면, 그 위로 넘친 시간과 양입니다. 넘친 양만큼을 줄이거나, 옮겨 간 시간도 상한을 넘지 않게 다른 시간으로 옮기면 그 상한까지 피크가 내려갑니다.</p>
+    <p class="note">요금 대상 시간(경부하시간대 22:00~08:00 · 일요일 · 공휴일을 뺀 시간)의 최대를 기준으로, 그 몇 %로 상한을 두면 위로 넘친 시간과 양입니다. 넘친 양만큼을 줄이거나 경부하 · 일요일 · 공휴일로 옮기면, 기본요금을 정하는 피크가 그 상한까지 내려갑니다. 그때 최근 12개월(데이터가 짧으면 있는 달 전부)의 요금적용전력 후보 합이 얼마로 내려가는지 아래 표와 같은 규칙으로 다시 셌고, 단가를 넣으면 1년 기본요금이 얼마 줄어드는지도 셉니다. 다른 평일 낮으로 옮기면 옮겨 간 시간도 상한을 넘지 않아야 같은 값이 나옵니다.</p>
     <div class="scroll"><table id="peak-shave"></table></div>
     <p class="note" id="peak-hours" style="margin-top:12px"></p>
     <h2 style="margin-top:20px">요금적용전력 후보</h2>
@@ -193,7 +193,7 @@ def run(path, country, contract=None, price=None):
         "segs_csv": seg.to_csv(index=False, encoding="utf-8"),
         "limit": detect.LIMIT_NOTE,
         "peak_month": peak.monthly(x).to_dict("records"),
-        "peak_shave": peak.shave(x).to_dict("records"),
+        "peak_shave": clean(peak.shave(x, peak.CAPS, country or "", None, peak.OFF_PEAK, contract, price)),
         "peak_season": peak.season_max(x),
         "peak_hours": [[int(h), int(c)] for h, c in peak.peak_hours(x)["시"].value_counts().head(5).items()],
         "peak_n": len(peak.peak_hours(x)),
@@ -319,8 +319,12 @@ function renderPeak(r) {
   $("peak-cards").innerHTML = card("기간 전체 최대", se["전체"]) + card("하계(7~9월) 최대", se["하계(7~9월)"]) + card("동계(12~2월) 최대", se["동계(12~2월)"]);
   $("peak-month").innerHTML = `<thead><tr><th>월</th><th>최대</th><th>최대 시각</th><th>요일</th><th>평균</th><th>부하율(평균/최대)</th></tr></thead><tbody>` +
     r.peak_month.map((m) => `<tr><td>${esc(m["월"])}</td><td>${num(m["최대"])}</td><td>${esc(m["최대 시각"])}</td><td>${esc(m["요일"])}</td><td>${num(m["평균"])}</td><td>${Number(m["부하율"]).toFixed(3)}</td></tr>`).join("") + `</tbody>`;
-  $("peak-shave").innerHTML = `<thead><tr><th>상한</th><th>상한값</th><th>넘친 시간</th><th>넘친 날</th><th>넘친 양(값×시간)</th><th>전체 사용량 중 몫</th></tr></thead><tbody>` +
-    r.peak_shave.map((s) => `<tr><td>연중 최대의 ${s["상한(연중 최대의 %)"]}%</td><td>${num(s["상한값"])}</td><td>${num(s["넘친 시간"])}</td><td>${num(s["넘친 날"])}</td><td>${num(s["넘친 양(값×시간)"])}</td><td>${(s["전체 사용량 중 몫"] * 100).toFixed(2)}%</td></tr>`).join("") + `</tbody>`;
+  const sh = r.peak_shave, won = sh.some((s) => "기본요금 절감(원)" in s);
+  $("peak-shave").innerHTML = !sh.length ? `<tbody><tr><td>요금 대상 시간이 없어 셈하지 못했습니다.</td></tr></tbody>` :
+    `<thead><tr><th>상한</th><th>상한값</th><th>넘친 시간</th><th>넘친 날</th><th>넘친 양(값×시간)</th><th>전체 사용량 중 몫</th><th>최근 ${sh[0]["셈한 달"]}개월 요금적용전력 합 (지금 → 상한 뒤)</th><th>줄어든 합</th>` +
+    (won ? `<th>기본요금 절감(원)</th>` : "") + `</tr></thead><tbody>` +
+    sh.map((s) => `<tr><td>요금 대상 최대의 ${s["상한(요금 대상 최대의 %)"]}%</td><td>${num(s["상한값"])}</td><td>${num(s["넘친 시간"])}</td><td>${num(s["넘친 날"])}</td><td>${num(s["넘친 양(값×시간)"])}</td><td>${(s["전체 사용량 중 몫"] * 100).toFixed(2)}%</td>` +
+      `<td>${num(s["요금적용전력 합(전)"])} → ${num(s["요금적용전력 합(후)"])}</td><td>${num(s["줄어든 합(값×달)"])}</td>` + (won ? `<td>${num(s["기본요금 절감(원)"])}</td>` : "") + `</tr>`).join("") + `</tbody>`;
   $("peak-hours").textContent = `가장 높았던 상위 1% 시간(${r.peak_n}시간)이 몰린 시각: ` +
     r.peak_hours.map(([h, c]) => `${h}시 ${c}시간`).join(" · ");
   $("peak-note").textContent = r.peak_note;

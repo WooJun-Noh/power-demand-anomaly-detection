@@ -18,6 +18,8 @@
 - 경부하시간대는 별표3(2022년 9월 부칙 판)의 22:00~08:00을 기본으로 쓴다. 2026년에 시간대를 바꾼다는 보도가 있으나
   약관 원문으로 확인하지 못했다 — --off-peak로 바꿀 수 있다. 공휴일 달력(holidays)에 임시공휴일이 섞이면 그날도 뺀다.
 - 단가는 계약종별 · 전압 · 선택요금마다 다르므로 직접 넣는다(--price). 계약전력 30% 하한은 계약전력을 넣을 때만 적용한다.
+- 피크를 낮추는 표의 절감액은 넘친 양을 경부하 · 일요일 · 공휴일로 옮기거나 줄였을 때의 값이다. 다른 평일 낮으로 옮기면
+  옮겨 간 시간도 상한을 넘지 않아야 같은 값이 나온다. 단가 인상 · 계약전력 변경은 넣지 않았다.
 - 값의 단위는 입력 그대로 쓴다. 시간별 kWh는 그 시간의 평균 kW와 같은 숫자다. 다른 단위면 표의 단위만 바꿔 읽는다.
 
 사용법
@@ -27,7 +29,8 @@
 
 출력
 - <입력>_피크_월별.csv : 달마다 최대 · 그 시각 · 요일 · 평균 · 부하율(평균/최대)
-- <입력>_피크_낮추기.csv : 연중 최대의 95 · 90 · 85 · 80%로 상한을 두면 그 위로 넘친 시간 수 · 날 수 · 넘친 양
+- <입력>_피크_낮추기.csv : 요금 대상 시간(경부하 · 일요일 · 공휴일 제외)의 최대의 95 · 90 · 85 · 80%로 상한을 두면 그 위로
+  넘친 시간 수 · 날 수 · 넘친 양, 최근 12개월 요금적용전력 후보 합이 얼마로 내려가는지, (단가를 넣으면) 기본요금 절감액
 - <입력>_요금적용전력.csv : 달마다 요금 대상 최대(경부하 · 일요일 · 공휴일 제외)와 제68조 제1항으로 고른 요금적용전력 후보,
   그 값을 정한 달, (계약전력을 넣으면) 30% 하한 적용 여부, (단가를 넣으면) 기본요금
 """
@@ -66,18 +69,39 @@ def monthly(x: pd.Series) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def shave(x: pd.Series, caps=CAPS) -> pd.DataFrame:
-    """연중 최대의 몇 %로 상한을 두면, 그 위로 넘친 시간 · 날 · 양(값 × 1시간)이 얼마인가."""
+def shave(x: pd.Series, caps=CAPS, country: str = "KR", subdiv=None, off_peak=OFF_PEAK,
+          contract=None, price=None) -> pd.DataFrame:
+    """요금 대상 시간(경부하 · 일요일 · 공휴일 제외)의 최대의 몇 %로 상한을 두면, 그 위로 넘친 시간 · 날 · 양이 얼마이고
+    최근 12개월(데이터가 그보다 짧으면 있는 달 전부)의 요금적용전력 후보 합과 기본요금이 얼마 줄어드는가.
+
+    넘친 양은 요금 대상 시간 안에서만 센다. 경부하 · 일요일 · 공휴일 값은 원래 요금적용전력에 들지 않으므로
+    그 시간으로 옮기면 기본요금을 정하는 피크가 상한까지 내려간다. 줄어드는 값은 상한을 넘은 시간을 상한으로 깎은
+    시리즈로 billing_demand를 다시 돌려 원래 값과 견준 차이다."""
     v = x.dropna()
-    top = float(v.max())
+    e = v[billing_mask(v.index, country, subdiv, off_peak)]
+    if e.empty:
+        return pd.DataFrame()
+    top = float(e.max())
+    col = "적용값" if contract else "요금적용전력 후보"
+    before = billing_demand(x, country, subdiv, off_peak, contract, price).tail(12)
     rows = []
     for c in caps:
         cap = top * c
-        over = v[v > cap]
-        rows.append({"상한(연중 최대의 %)": int(round(c * 100)), "상한값": round(cap, 1),
-                     "넘친 시간": int(len(over)), "넘친 날": int(over.index.normalize().nunique()),
-                     "넘친 양(값×시간)": round(float((over - cap).sum()), 1),
-                     "전체 사용량 중 몫": round(float((over - cap).sum() / v.sum()), 5) if v.sum() > 0 else np.nan})
+        over = e[e > cap]
+        x2 = x.copy()
+        x2.loc[over.index] = cap
+        after = billing_demand(x2, country, subdiv, off_peak, contract, price).tail(12)
+        r = {"상한(요금 대상 최대의 %)": int(round(c * 100)), "상한값": round(cap, 1),
+             "넘친 시간": int(len(over)), "넘친 날": int(over.index.normalize().nunique()),
+             "넘친 양(값×시간)": round(float((over - cap).sum()), 1),
+             "전체 사용량 중 몫": round(float((over - cap).sum() / v.sum()), 5) if v.sum() > 0 else np.nan,
+             "셈한 달": int(len(before)),
+             "요금적용전력 합(전)": round(float(before[col].sum()), 1),
+             "요금적용전력 합(후)": round(float(after[col].sum()), 1)}
+        r["줄어든 합(값×달)"] = round(r["요금적용전력 합(전)"] - r["요금적용전력 합(후)"], 1)
+        if price:
+            r["기본요금 절감(원)"] = int(before["기본요금(원)"].sum() - after["기본요금(원)"].sum())
+        rows.append(r)
     return pd.DataFrame(rows)
 
 
@@ -161,7 +185,8 @@ def main() -> None:
     off = tuple(int(t) for t in a.off_peak.split("-"))
 
     x = detect.to_series(detect.read_any(a.csv), a.time, a.value)
-    mo, sv, se = monthly(x), shave(x), season_max(x)
+    mo, se = monthly(x), season_max(x)
+    sv = shave(x, CAPS, a.country, None, off, a.contract, a.price)
     stem = a.csv.with_suffix("")
     mo.to_csv(f"{stem}_피크_월별.csv", index=False, encoding="utf-8-sig")
     sv.to_csv(f"{stem}_피크_낮추기.csv", index=False, encoding="utf-8-sig")
