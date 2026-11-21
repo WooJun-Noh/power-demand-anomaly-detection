@@ -155,6 +155,9 @@ const say = (t, err = false) => { statusEl.textContent = t; statusEl.classList.t
 let py = null, last = null;
 
 const PY_RUN = `
+import os
+# Pyodide는 LANG을 en_US로 두어 holidays가 공휴일 이름을 영어로 낸다. 명령줄처럼 나라 기본 언어(KR이면 한국어)로 맞춘다
+os.environ.pop("LANG", None)
 import json
 from pathlib import Path
 import pandas as pd
